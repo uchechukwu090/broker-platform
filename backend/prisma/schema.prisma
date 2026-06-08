@@ -1,0 +1,228 @@
+// Prisma schema for broker-platform backend.
+// Datasource: PostgreSQL. Run `npx prisma migrate dev` to apply.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------- Enums ----------------
+
+enum UserRole {
+  user
+  admin
+  owner
+}
+
+enum KycStatus {
+  none
+  pending
+  verified
+  rejected
+}
+
+enum Plan {
+  normal
+  pro
+}
+
+enum InvestmentStatus {
+  active
+  paused
+  completed
+  withdrawn
+}
+
+enum PayoutStatus {
+  pending
+  approved
+  paid
+}
+
+enum TradeSource {
+  signal
+  wickbot
+}
+
+// ---------------- Models ----------------
+
+model User {
+  id                String     @id @default(cuid())
+  email             String     @unique
+  passwordHash      String?
+  googleSub         String?    @unique
+  role              UserRole   @default(user)
+  plan              Plan       @default(normal)
+  twoFactorSecret   String?
+  twoFactorEnabled  Boolean    @default(false)
+  kycStatus         KycStatus  @default(none)
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  investments       Investment[]
+  payouts           Payout[]
+  refreshTokens     RefreshToken[]
+  backupCodes       TwoFactorBackupCode[]
+  auditLogs         AuditLog[] @relation("ActorAudits")
+
+  @@index([role])
+}
+
+model Investment {
+  id              String           @id @default(cuid())
+  userId          String
+  amount          Decimal          @db.Decimal(18, 2)
+  plan            Plan
+  durationDays    Int
+  startDate       DateTime         @default(now())
+  endDate         DateTime
+  status          InvestmentStatus @default(active)
+  poolAllocation  Json
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  poolShares      PoolShare[]
+  payouts         Payout[]
+
+  @@index([userId])
+  @@index([status])
+}
+
+model Pool {
+  id                   String     @id // "A" or "B"
+  name                 String
+  fbsAccountLogin      String
+  fbsAccountPasswordEnc String    // AES-256-GCM ciphertext
+  hmacSecret           String     // Per-pool HMAC secret for EA bridge
+  totalEquity          Decimal    @default(0) @db.Decimal(18, 2)
+  totalUserCapital     Decimal    @default(0) @db.Decimal(18, 2)
+  lastSyncedAt         DateTime?
+  createdAt            DateTime   @default(now())
+  updatedAt            DateTime   @updatedAt
+
+  poolShares           PoolShare[]
+  trades               Trade[]
+  signals              Signal[]
+}
+
+model PoolShare {
+  id              String     @id @default(cuid())
+  investmentId    String
+  poolId          String
+  capitalInPool   Decimal    @db.Decimal(18, 2)
+  sharePct        Decimal    @db.Decimal(8, 6) // computed but stored
+  lastUpdated     DateTime   @default(now())
+
+  investment      Investment @relation(fields: [investmentId], references: [id], onDelete: Cascade)
+  pool            Pool       @relation(fields: [poolId], references: [id])
+
+  @@unique([investmentId, poolId])
+  @@index([poolId])
+}
+
+model Trade {
+  id          String      @id @default(cuid())
+  poolId      String
+  ticket      String
+  symbol      String
+  type        String      // BUY | SELL
+  lotSize     Decimal     @db.Decimal(10, 3)
+  openPrice   Decimal     @db.Decimal(18, 6)
+  closePrice  Decimal?    @db.Decimal(18, 6)
+  sl          Decimal?    @db.Decimal(18, 6)
+  tp          Decimal?    @db.Decimal(18, 6)
+  pnl         Decimal?    @db.Decimal(18, 2)
+  openedAt    DateTime    @default(now())
+  closedAt    DateTime?
+  eaSource    TradeSource
+
+  pool        Pool        @relation(fields: [poolId], references: [id])
+
+  @@unique([poolId, ticket])
+  @@index([poolId, closedAt])
+}
+
+model Payout {
+  id            String       @id @default(cuid())
+  userId        String
+  investmentId  String
+  grossPnl      Decimal      @db.Decimal(18, 2)
+  platformFee   Decimal      @db.Decimal(18, 2)
+  netPayout     Decimal      @db.Decimal(18, 2)
+  status        PayoutStatus @default(pending)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  investment    Investment   @relation(fields: [investmentId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+}
+
+model Signal {
+  id            String   @id @default(cuid())
+  poolId        String   // "A" or "B"
+  source        String
+  symbol        String
+  type          String   // BUY | SELL
+  entry         Decimal  @db.Decimal(18, 6)
+  sl            Decimal  @db.Decimal(18, 6)
+  tp            Decimal  @db.Decimal(18, 6)
+  raw           Json
+  receivedAt    DateTime @default(now())
+  dispatchedTo  String?  // EA identifier that picked it up
+  status        String   @default("queued") // queued | dispatched | failed
+
+  pool          Pool     @relation(fields: [poolId], references: [id])
+
+  @@index([poolId, status])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?
+  action    String
+  target    String
+  before    Json?
+  after     Json?
+  createdAt DateTime @default(now())
+
+  actor     User?    @relation("ActorAudits", fields: [actorId], references: [id])
+
+  @@index([actorId])
+  @@index([action])
+}
+
+model RefreshToken {
+  id          String   @id @default(cuid())
+  userId      String
+  tokenHash   String   @unique
+  userAgent   String?
+  ip          String?
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  createdAt   DateTime @default(now())
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model TwoFactorBackupCode {
+  id        String   @id @default(cuid())
+  userId    String
+  codeHash  String
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+  usedAt    DateTime?
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
