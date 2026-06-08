@@ -36,7 +36,7 @@ services:
     region: oregon
     runtime: docker
     rootDir: backend
-    dockerfilePath: ./Dockerfile
+    dockerfilePath: Dockerfile
     dockerContext: .
     healthCheckPath: /health
     autoDeploy: true
@@ -102,7 +102,7 @@ services:
     region: oregon
     runtime: docker
     rootDir: frontend
-    dockerfilePath: ./Dockerfile
+    dockerfilePath: Dockerfile
     dockerContext: .
     autoDeploy: true
     envVars:
